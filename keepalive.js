@@ -10,7 +10,8 @@ function loadDomains() {
     return fs.readFileSync(DOMAINS_FILE, 'utf8')
         .split('\n')
         .map(l => l.trim())
-        .filter(l => l && !l.startsWith('#'))
+        .map(l => l.replace(/#.*$/, '').trim()) // 去掉行内注释
+        .filter(l => l)
         .map(l => /^https?:\/\//i.test(l) ? l : `http://${l}`);
 }
 
