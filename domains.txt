@@ -1,4 +1,2 @@
-# 每行一个站点，支持 http/https，没有协议头会自动补 http://
-# 示例：
-https://example.com
-https://another-site.org
+https://fcrobt.wuaze.com #20270121
+
