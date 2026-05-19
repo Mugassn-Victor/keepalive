@@ -40,11 +40,19 @@ async function visitSite(browser, url) {
         const title = await page.title().catch(() => '(无标题)');
         console.log(`  ✅ ${url} — ${title}`);
         
-        // 返回备份链接（如果不是ERROR开头）
-        if (bodyText && !bodyText.startsWith('ERROR')) {
+        // 只返回有效的备份链接（必须以 http:// 或 https:// 开头，且不包含错误关键词）
+        if (bodyText && 
+            (bodyText.startsWith('http://') || bodyText.startsWith('https://')) &&
+            !bodyText.includes('404') &&
+            !bodyText.includes('Not Found') &&
+            !bodyText.includes('blocked')) {
             return { success: true, url: bodyText };
         } else {
-            console.log(`  ⚠️ 备份失败: ${bodyText}`);
+            if (bodyText && bodyText.startsWith('ERROR')) {
+                console.log(`  ⚠️ 备份失败: ${bodyText}`);
+            } else {
+                console.log(`  ⚠️ 未配置 bk.php 或返回无效内容`);
+            }
             return { success: false };
         }
     } catch (err) {
@@ -86,8 +94,8 @@ async function main() {
         }
         if (result?.success) {
             success++;
-            // 更新该网站的备份记录（覆盖旧的）
-            existingBackups[url] = `${new Date().toISOString()} | ${url} | ${result.url}`;
+            // 更新该网站的备份记录（覆盖旧的），只保存链接
+            existingBackups[url] = result.url;
         }
     }
 
@@ -100,8 +108,7 @@ async function main() {
     
     console.log(`\n🎯 完成: ${success}/${domains.length} 成功`);
 
-    // 有失败则以非零退出码退出，方便 Actions 标记失败
-    if (success < domains.length) process.exit(1);
+    // 不再以非零退出码退出，确保后续步骤能执行
 }
 
 main().catch(err => {
