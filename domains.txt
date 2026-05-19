@@ -21,3 +21,4 @@ en.gdgtzx.com
 cleaningmachine-ask.com
 en.xingwang168.cn
 en.gzxiangtu.com
+yun.mugassn.cloudns.org
