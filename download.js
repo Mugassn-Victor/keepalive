@@ -1,10 +1,10 @@
+const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const http = require('http');
 
 const DOMAINS_FILE = path.join(__dirname, 'domains.txt');
 const DOWNLOAD_DIR = path.join(__dirname, 'website');
+const PAGE_TIMEOUT = 60000;
 
 // 确保下载目录存在
 if (!fs.existsSync(DOWNLOAD_DIR)) {
@@ -26,73 +26,67 @@ function getDomainName(url) {
     return match ? match[1] : 'unknown';
 }
 
-function triggerBackup(baseUrl) {
-    return new Promise((resolve, reject) => {
-        const backupUrl = `${baseUrl}/backup.php?c`;
-        const protocol = baseUrl.startsWith('https') ? https : http;
-        
-        protocol.get(backupUrl, (response) => {
-            let data = '';
-            response.on('data', chunk => data += chunk);
-            response.on('end', () => {
-                if (data.trim() === 'success') {
-                    resolve();
-                } else {
-                    reject(new Error(data.trim() || 'backup failed'));
-                }
-            });
-        }).on('error', reject);
-    });
+async function triggerBackupAndWait(page, baseUrl) {
+    const backupUrl = `${baseUrl}/backup.php?c`;
+    
+    await page.goto(backupUrl, { waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
+    await page.waitForTimeout(2000);
+    
+    // 检查是否有 JS 验证
+    const content = await page.content();
+    if (content.includes('slowAES') || content.includes('aes.js')) {
+        console.log(`  JS验证页面，等待跳转...`);
+        await page.waitForNavigation({ waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
+        await page.waitForTimeout(2000);
+    }
+    
+    // 获取返回内容
+    const bodyText = await page.evaluate(() => document.body.innerText.trim());
+    
+    if (bodyText === 'success') {
+        return true;
+    } else {
+        throw new Error(bodyText || 'backup failed');
+    }
 }
 
-function downloadFile(url, dest) {
-    return new Promise((resolve, reject) => {
-        const protocol = url.startsWith('https') ? https : http;
-        const file = fs.createWriteStream(dest);
-        
-        protocol.get(url, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                file.close();
-                fs.unlinkSync(dest);
-                return downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-            }
-            
-            if (response.statusCode !== 200) {
-                file.close();
-                fs.unlinkSync(dest);
-                return reject(new Error(`HTTP ${response.statusCode}`));
-            }
-            
-            const totalSize = parseInt(response.headers['content-length'], 10);
-            let downloadedSize = 0;
-            
-            response.on('data', (chunk) => {
-                downloadedSize += chunk.length;
-                if (totalSize) {
-                    const percent = ((downloadedSize / totalSize) * 100).toFixed(1);
-                    process.stdout.write(`\r  下载中: ${percent}%`);
-                }
-            });
-            
-            response.pipe(file);
-            
-            file.on('finish', () => {
-                file.close();
-                process.stdout.write('\r');
-                resolve();
-            });
-        }).on('error', (err) => {
-            file.close();
-            fs.unlinkSync(dest);
-            reject(err);
-        });
-    });
+async function downloadFile(page, zipUrl, destPath) {
+    // 使用 Playwright 下载文件
+    const downloadPromise = page.waitForEvent('download', { timeout: PAGE_TIMEOUT });
+    
+    await page.goto(zipUrl, { waitUntil: 'commit', timeout: PAGE_TIMEOUT });
+    
+    try {
+        const download = await downloadPromise;
+        await download.saveAs(destPath);
+    } catch (err) {
+        // 如果不是下载事件，直接用 page.content 获取并保存
+        const response = await page.goto(zipUrl, { waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
+        if (response && response.ok()) {
+            const buffer = await response.body();
+            fs.writeFileSync(destPath, buffer);
+        } else {
+            throw new Error('Download failed');
+        }
+    }
 }
 
-async function downloadSite(baseUrl) {
+async function deleteBackup(page, baseUrl) {
+    const deleteUrl = `${baseUrl}/backup.php?d`;
+    await page.goto(deleteUrl, { waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
+    const bodyText = await page.evaluate(() => document.body.innerText.trim());
+    return bodyText === 'success';
+}
+
+async function downloadSite(browser, baseUrl) {
     const domain = getDomainName(baseUrl);
     const zipUrl = `${baseUrl}/${domain}.zip`;
     const destPath = path.join(DOWNLOAD_DIR, `${domain}.zip`);
+    
+    const page = await browser.newPage({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 }
+    });
     
     try {
         console.log(`[${domain}]`);
@@ -104,35 +98,28 @@ async function downloadSite(baseUrl) {
         
         // 先触发压缩
         console.log(`  压缩中...`);
-        await triggerBackup(baseUrl);
+        await triggerBackupAndWait(page, baseUrl);
         console.log(`  压缩完成`);
         
         // 压缩成功后再下载
         console.log(`  下载中...`);
-        await downloadFile(zipUrl, destPath);
+        await downloadFile(page, zipUrl, destPath);
         
         const stats = fs.statSync(destPath);
         const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
         console.log(`  下载完成: ${sizeMB} MB`);
         
         // 下载完成后删除服务器上的压缩包
-        const deleteUrl = `${baseUrl}/backup.php?d`;
-        const protocol = baseUrl.startsWith('https') ? https : http;
-        
-        protocol.get(deleteUrl, (response) => {
-            let data = '';
-            response.on('data', chunk => data += chunk);
-            response.on('end', () => {
-                if (data.trim() === 'success') {
-                    console.log(`  已清理服务器文件`);
-                }
-            });
-        }).on('error', () => {});
+        if (await deleteBackup(page, baseUrl)) {
+            console.log(`  已清理服务器文件`);
+        }
         
         return true;
     } catch (err) {
         console.log(`  失败: ${err.message}`);
         return false;
+    } finally {
+        await page.close();
     }
 }
 
@@ -140,12 +127,19 @@ async function main() {
     const domains = loadDomains();
     console.log(`共 ${domains.length} 个站点\n`);
     
+    const browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    });
+    
     let success = 0;
     for (const url of domains) {
-        if (await downloadSite(url)) {
+        if (await downloadSite(browser, url)) {
             success++;
         }
     }
+    
+    await browser.close();
     
     console.log(`\n完成: ${success}/${domains.length} 成功`);
 }
