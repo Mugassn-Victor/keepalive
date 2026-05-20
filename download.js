@@ -62,86 +62,44 @@ async function triggerBackupAndWait(page, baseUrl) {
 }
 
 async function downloadFile(page, zipUrl, destPath) {
-    // 先访问一次 zip URL 来处理可能的 JS 验证（和 keepalive.js 一样）
-    await page.goto(zipUrl, { waitUntil: 'networkidle', timeout: 0 });
-    await page.waitForTimeout(2000);
-    
-    // 检查是否有 JS 验证
-    const content = await page.content();
-    if (content.includes('slowAES') || content.includes('aes.js')) {
-        console.log(`  下载页面有JS验证，等待跳转...`);
-        await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 0 });
-        await page.waitForTimeout(2000);
-    }
-    
-    // 使用流式下载，避免大文件占用过多内存
-    return new Promise(async (resolve, reject) => {
-        try {
-            const protocol = zipUrl.startsWith('https') ? https : http;
+    // 直接 HTTP 下载，不需要 cookie
+    return new Promise((resolve, reject) => {
+        const protocol = zipUrl.startsWith('https') ? https : http;
+        const file = fs.createWriteStream(destPath);
+        
+        protocol.get(zipUrl, (response) => {
+            // 处理重定向
+            if (response.statusCode === 302 || response.statusCode === 301) {
+                file.close();
+                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                const redirectUrl = response.headers.location;
+                return downloadFile(page, redirectUrl, destPath).then(resolve).catch(reject);
+            }
             
-            // 从 page 获取 cookies
-            const cookies = await page.context().cookies(zipUrl);
-            const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+            if (response.statusCode !== 200) {
+                file.close();
+                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                return reject(new Error(`HTTP ${response.statusCode}`));
+            }
             
-            const urlObj = new URL(zipUrl);
-            const options = {
-                hostname: urlObj.hostname,
-                port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
-                path: urlObj.pathname,
-                method: 'GET',
-                headers: {
-                    'Cookie': cookieHeader,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            };
+            // 流式写入文件
+            response.pipe(file);
             
-            const file = fs.createWriteStream(destPath);
-            
-            const req = protocol.request(options, (response) => {
-                // 处理重定向
-                if (response.statusCode === 302 || response.statusCode === 301) {
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                    const redirectUrl = response.headers.location.startsWith('http') 
-                        ? response.headers.location 
-                        : `${urlObj.protocol}//${urlObj.host}${response.headers.location}`;
-                    return downloadFile(page, redirectUrl, destPath).then(resolve).catch(reject);
-                }
-                
-                if (response.statusCode !== 200) {
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                    return reject(new Error(`HTTP ${response.statusCode}`));
-                }
-                
-                // 流式写入文件
-                response.pipe(file);
-                
-                file.on('finish', () => {
-                    file.close();
-                    resolve();
-                });
-                
-                file.on('error', (err) => {
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                    reject(err);
-                });
+            file.on('finish', () => {
+                file.close();
+                resolve();
             });
             
-            req.on('error', (err) => {
-                if (file) {
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                }
+            file.on('error', (err) => {
+                file.close();
+                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
                 reject(err);
             });
-            
-            req.setTimeout(0); // 无超时限制
-            req.end();
-        } catch (err) {
+        }).on('error', (err) => {
+            file.close();
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
             reject(err);
-        }
+        });
     });
 }
 
