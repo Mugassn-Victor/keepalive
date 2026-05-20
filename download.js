@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const os = require('os');
 
 const DOMAINS_FILE = path.join(__dirname, 'domains.txt');
 const DOWNLOAD_DIR = path.join(__dirname, 'website');
@@ -149,6 +150,25 @@ async function downloadSite(browser, baseUrl) {
 
 async function main() {
     const domains = loadDomains();
+    
+    // 根据 CPU 核心数和内存自动决定并发数
+    const cpuCount = os.cpus().length;
+    const totalMemGB = os.totalmem() / (1024 ** 3);
+    const freeMemGB = os.freemem() / (1024 ** 3);
+    
+    // 激进模式：最大化利用服务器资源
+    // - 每个浏览器实例约占用 200-300MB 内存
+    // - 只保留 500MB 系统内存
+    const memBasedConcurrency = Math.floor((freeMemGB - 0.5) / 0.25);
+    
+    // CPU 并发：使用 CPU 核心数的 1.5 倍（考虑 I/O 等待）
+    const cpuBasedConcurrency = Math.ceil(cpuCount * 1.5);
+    
+    // 取两者较小值，最少5个，最多20个
+    const concurrency = Math.max(5, Math.min(20, memBasedConcurrency, cpuBasedConcurrency));
+    
+    console.log(`系统信息: ${cpuCount} 核 CPU, ${totalMemGB.toFixed(1)}GB 总内存, ${freeMemGB.toFixed(1)}GB 空闲内存`);
+    console.log(`并发数: ${concurrency} 个站点同时处理`);
     console.log(`共 ${domains.length} 个站点\n`);
     
     const browser = await chromium.launch({
@@ -157,10 +177,20 @@ async function main() {
     });
     
     let success = 0;
-    for (const url of domains) {
-        if (await downloadSite(browser, url)) {
-            success++;
-        }
+    
+    for (let i = 0; i < domains.length; i += concurrency) {
+        const batch = domains.slice(i, i + concurrency);
+        console.log(`\n批次 ${Math.floor(i / concurrency) + 1}: 处理 ${batch.length} 个站点`);
+        
+        const results = await Promise.allSettled(
+            batch.map(url => downloadSite(browser, url))
+        );
+        
+        results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+                success++;
+            }
+        });
     }
     
     await browser.close();
