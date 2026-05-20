@@ -1,6 +1,8 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 
 const DOMAINS_FILE = path.join(__dirname, 'domains.txt');
 const DOWNLOAD_DIR = path.join(__dirname, 'website');
@@ -46,26 +48,82 @@ async function triggerBackupAndWait(page, baseUrl) {
     if (bodyText === 'success') {
         return true;
     } else {
-        throw new Error(bodyText || 'backup failed');
+        // 显示实际返回的内容
+        const preview = bodyText.length > 100 ? bodyText.substring(0, 100) + '...' : bodyText;
+        throw new Error(preview || 'backup failed');
     }
 }
 
 async function downloadFile(page, zipUrl, destPath) {
-    // 使用 Playwright 的 API 直接获取文件内容，设置无限超时
-    try {
-        const response = await page.request.get(zipUrl, {
-            timeout: 0  // 无限等待，不超时
-        });
-        
-        if (!response.ok()) {
-            throw new Error(`HTTP ${response.status()}`);
+    // 使用流式下载，避免大文件占用过多内存
+    return new Promise(async (resolve, reject) => {
+        try {
+            const protocol = zipUrl.startsWith('https') ? https : http;
+            
+            // 从 page 获取 cookies
+            const cookies = await page.context().cookies(zipUrl);
+            const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+            
+            const urlObj = new URL(zipUrl);
+            const options = {
+                hostname: urlObj.hostname,
+                port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+                path: urlObj.pathname,
+                method: 'GET',
+                headers: {
+                    'Cookie': cookieHeader,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            };
+            
+            const file = fs.createWriteStream(destPath);
+            
+            const req = protocol.request(options, (response) => {
+                // 处理重定向
+                if (response.statusCode === 302 || response.statusCode === 301) {
+                    file.close();
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                    const redirectUrl = response.headers.location.startsWith('http') 
+                        ? response.headers.location 
+                        : `${urlObj.protocol}//${urlObj.host}${response.headers.location}`;
+                    return downloadFile(page, redirectUrl, destPath).then(resolve).catch(reject);
+                }
+                
+                if (response.statusCode !== 200) {
+                    file.close();
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                    return reject(new Error(`HTTP ${response.statusCode}`));
+                }
+                
+                // 流式写入文件
+                response.pipe(file);
+                
+                file.on('finish', () => {
+                    file.close();
+                    resolve();
+                });
+                
+                file.on('error', (err) => {
+                    file.close();
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                    reject(err);
+                });
+            });
+            
+            req.on('error', (err) => {
+                if (file) {
+                    file.close();
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                }
+                reject(err);
+            });
+            
+            req.setTimeout(0); // 无超时限制
+            req.end();
+        } catch (err) {
+            reject(err);
         }
-        
-        const buffer = await response.body();
-        fs.writeFileSync(destPath, buffer);
-    } catch (err) {
-        throw new Error(`下载失败: ${err.message}`);
-    }
+    });
 }
 
 async function deleteBackup(page, baseUrl) {
