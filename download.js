@@ -6,7 +6,7 @@ const http = require('http');
 
 const DOMAINS_FILE = path.join(__dirname, 'domains.txt');
 const DOWNLOAD_DIR = path.join(__dirname, 'website');
-const PAGE_TIMEOUT = 0; // 无限等待，不超时
+const PAGE_TIMEOUT = 0; // 压缩无限等待，不超时
 
 // 确保下载目录存在
 if (!fs.existsSync(DOWNLOAD_DIR)) {
@@ -31,25 +31,40 @@ function getDomainName(url) {
 async function triggerBackupAndWait(page, baseUrl) {
     const backupUrl = `${baseUrl}/backup.php?c`;
     
-    await page.goto(backupUrl, { waitUntil: 'load', timeout: PAGE_TIMEOUT });
+    const response = await page.goto(backupUrl, { waitUntil: 'load', timeout: 30000 }); // 30秒检测是否存在
+    
+    // 检查是否是 404 或其他错误
+    if (response.status() === 404) {
+        throw new Error('backup.php 不存在 (404)');
+    }
+    
+    if (response.status() !== 200) {
+        throw new Error(`HTTP ${response.status()}`);
+    }
+    
     await page.waitForTimeout(3000);
     
     // 检查是否有 JS 验证
     const content = await page.content();
     if (content.includes('slowAES') || content.includes('aes.js')) {
         console.log(`  JS验证页面，等待跳转...`);
-        await page.waitForNavigation({ waitUntil: 'load', timeout: PAGE_TIMEOUT });
+        await page.waitForNavigation({ waitUntil: 'load', timeout: 0 }); // 验证后无限等待压缩
         await page.waitForTimeout(3000);
     }
     
     // 等待 body 元素加载
-    await page.waitForSelector('body', { timeout: PAGE_TIMEOUT });
+    await page.waitForSelector('body', { timeout: 10000 });
     
     // 获取返回内容
     const bodyText = await page.evaluate(() => {
         const body = document.body;
         return body ? body.innerText.trim() : '';
     });
+    
+    // 检查是否是 404 页面内容
+    if (bodyText.includes('404') || bodyText.includes('Not Found') || bodyText.includes('not found')) {
+        throw new Error('backup.php 不存在');
+    }
     
     if (bodyText === 'success') {
         return true;
