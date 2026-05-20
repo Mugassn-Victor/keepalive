@@ -62,45 +62,28 @@ async function triggerBackupAndWait(page, baseUrl) {
 }
 
 async function downloadFile(page, zipUrl, destPath) {
-    // 直接 HTTP 下载，不需要 cookie
-    return new Promise((resolve, reject) => {
-        const protocol = zipUrl.startsWith('https') ? https : http;
-        const file = fs.createWriteStream(destPath);
+    // 使用 Playwright 下载，因为需要保持验证状态
+    try {
+        // 设置下载路径
+        const downloadPath = path.dirname(destPath);
         
-        protocol.get(zipUrl, (response) => {
-            // 处理重定向
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                file.close();
-                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                const redirectUrl = response.headers.location;
-                return downloadFile(page, redirectUrl, destPath).then(resolve).catch(reject);
-            }
-            
-            if (response.statusCode !== 200) {
-                file.close();
-                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                return reject(new Error(`HTTP ${response.statusCode}`));
-            }
-            
-            // 流式写入文件
-            response.pipe(file);
-            
-            file.on('finish', () => {
-                file.close();
-                resolve();
-            });
-            
-            file.on('error', (err) => {
-                file.close();
-                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                reject(err);
-            });
-        }).on('error', (err) => {
-            file.close();
-            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-            reject(err);
-        });
-    });
+        // 监听下载事件
+        const downloadPromise = page.waitForEvent('download', { timeout: 0 });
+        
+        // 触发下载
+        await page.evaluate((url) => {
+            window.location.href = url;
+        }, zipUrl);
+        
+        // 等待下载开始
+        const download = await downloadPromise;
+        
+        // 保存到指定路径
+        await download.saveAs(destPath);
+        
+    } catch (err) {
+        throw new Error(`下载失败: ${err.message}`);
+    }
 }
 
 async function deleteBackup(page, baseUrl) {
