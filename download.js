@@ -31,25 +31,29 @@ function getDomainName(url) {
 async function triggerBackupAndWait(page, baseUrl) {
     const backupUrl = `${baseUrl}/backup.php?c`;
     
-    const response = await page.goto(backupUrl, { waitUntil: 'load', timeout: 30000 }); // 30秒检测是否存在
+    const response = await page.goto(backupUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }); // 60秒足够通过JS验证
     
     // 检查是否是 404 或其他错误
-    if (response.status() === 404) {
+    if (response && response.status() === 404) {
         throw new Error('backup.php 不存在 (404)');
     }
     
-    if (response.status() !== 200) {
+    if (response && response.status() !== 200) {
         throw new Error(`HTTP ${response.status()}`);
     }
     
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2000);
     
     // 检查是否有 JS 验证
     const content = await page.content();
     if (content.includes('slowAES') || content.includes('aes.js')) {
         console.log(`  JS验证页面，等待跳转...`);
-        await page.waitForNavigation({ waitUntil: 'load', timeout: 0 }); // 验证后无限等待压缩
-        await page.waitForTimeout(3000);
+        try {
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            await page.waitForTimeout(2000);
+        } catch (err) {
+            // 如果没有跳转，可能已经在正确页面了
+        }
     }
     
     // 等待 body 元素加载
@@ -66,16 +70,43 @@ async function triggerBackupAndWait(page, baseUrl) {
         throw new Error('backup.php 不存在');
     }
     
+    // 如果返回的是 success，说明压缩完成
     if (bodyText === 'success') {
         return true;
-    } else {
-        // 显示实际返回的内容
-        const preview = bodyText.length > 100 ? bodyText.substring(0, 100) + '...' : bodyText;
-        throw new Error(preview || 'backup failed');
     }
+    
+    // 如果页面还在压缩中（有空格输出），等待完成
+    if (bodyText === '' || bodyText.match(/^\s+$/)) {
+        console.log(`  压缩中，等待完成...`);
+        // 等待页面内容变化为 success
+        await page.waitForFunction(() => {
+            const body = document.body;
+            return body && body.innerText.trim() === 'success';
+        }, { timeout: 0 }); // 无限等待压缩完成
+        return true;
+    }
+    
+    // 其他情况显示错误
+    const preview = bodyText.length > 100 ? bodyText.substring(0, 100) + '...' : bodyText;
+    throw new Error(preview || 'backup failed');
 }
 
 async function downloadFile(page, zipUrl, destPath) {
+    // 先访问一次 zip URL 来处理可能的 JS 验证
+    try {
+        const testResponse = await page.goto(zipUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        
+        // 检查是否有 JS 验证
+        const content = await page.content();
+        if (content.includes('slowAES') || content.includes('aes.js')) {
+            console.log(`  下载页面有JS验证，等待跳转...`);
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            await page.waitForTimeout(2000);
+        }
+    } catch (err) {
+        // 忽略错误，继续尝试下载
+    }
+    
     // 使用流式下载，避免大文件占用过多内存
     return new Promise(async (resolve, reject) => {
         try {
