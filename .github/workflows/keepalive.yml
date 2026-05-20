@@ -2,8 +2,8 @@ name: Backup to Release
 
 on:
   schedule:
-    # 每天运行一次，UTC 时间 02:00（北京时间 10:00）
-    - cron: '0 2 * * *'
+    # 每天运行一次，UTC 时间 05:00（北京时间 13:00）
+    - cron: '0 5 * * *'
   workflow_dispatch: # 允许手动触发
 
 permissions:
