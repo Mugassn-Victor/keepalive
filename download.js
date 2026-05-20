@@ -6,7 +6,7 @@ const http = require('http');
 
 const DOMAINS_FILE = path.join(__dirname, 'domains.txt');
 const DOWNLOAD_DIR = path.join(__dirname, 'website');
-const PAGE_TIMEOUT = 60000;
+const PAGE_TIMEOUT = 0; // 无限等待，不超时
 
 // 确保下载目录存在
 if (!fs.existsSync(DOWNLOAD_DIR)) {
