@@ -31,19 +31,25 @@ function getDomainName(url) {
 async function triggerBackupAndWait(page, baseUrl) {
     const backupUrl = `${baseUrl}/backup.php?c`;
     
-    await page.goto(backupUrl, { waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
-    await page.waitForTimeout(2000);
+    await page.goto(backupUrl, { waitUntil: 'load', timeout: PAGE_TIMEOUT });
+    await page.waitForTimeout(3000);
     
     // 检查是否有 JS 验证
     const content = await page.content();
     if (content.includes('slowAES') || content.includes('aes.js')) {
         console.log(`  JS验证页面，等待跳转...`);
-        await page.waitForNavigation({ waitUntil: 'networkidle', timeout: PAGE_TIMEOUT });
-        await page.waitForTimeout(2000);
+        await page.waitForNavigation({ waitUntil: 'load', timeout: PAGE_TIMEOUT });
+        await page.waitForTimeout(3000);
     }
     
+    // 等待 body 元素加载
+    await page.waitForSelector('body', { timeout: PAGE_TIMEOUT });
+    
     // 获取返回内容
-    const bodyText = await page.evaluate(() => document.body.innerText.trim());
+    const bodyText = await page.evaluate(() => {
+        const body = document.body;
+        return body ? body.innerText.trim() : '';
+    });
     
     if (bodyText === 'success') {
         return true;
@@ -165,8 +171,10 @@ async function downloadSite(browser, baseUrl) {
         
         // 检查文件大小，如果太小可能下载失败
         if (stats.size < 1024) {
+            // 读取文件内容看看是什么
+            const content = fs.readFileSync(destPath, 'utf8').substring(0, 200);
             fs.unlinkSync(destPath);
-            throw new Error(`文件太小 (${stats.size} bytes)，可能下载失败`);
+            throw new Error(`文件太小 (${stats.size} bytes)，内容: ${content}`);
         }
         
         console.log(`  下载完成: ${sizeMB} MB`);
