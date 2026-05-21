@@ -177,21 +177,34 @@ async function main() {
     });
     
     let success = 0;
+    let completed = 0;
+    let index = 0;
+    const total = domains.length;
     
-    for (let i = 0; i < domains.length; i += concurrency) {
-        const batch = domains.slice(i, i + concurrency);
-        console.log(`\n批次 ${Math.floor(i / concurrency) + 1}: 处理 ${batch.length} 个站点`);
-        
-        const results = await Promise.allSettled(
-            batch.map(url => downloadSite(browser, url))
-        );
-        
-        results.forEach(result => {
-            if (result.status === 'fulfilled' && result.value) {
-                success++;
-            }
-        });
+    // 动态并发池：一个完成立即开始下一个
+    const workers = [];
+    
+    async function worker() {
+        while (index < total) {
+            const currentIndex = index++;
+            const url = domains[currentIndex];
+            
+            const result = await downloadSite(browser, url);
+            
+            completed++;
+            if (result) success++;
+            
+            console.log(`进度: ${completed}/${total} (成功: ${success})`);
+        }
     }
+    
+    // 启动固定数量的 worker
+    for (let i = 0; i < concurrency; i++) {
+        workers.push(worker());
+    }
+    
+    // 等待所有 worker 完成
+    await Promise.all(workers);
     
     await browser.close();
     
