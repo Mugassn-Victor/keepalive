@@ -1,11 +1,15 @@
 const { chromium } = require('playwright');
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const https = require('https');
 
 const DIR = path.join(__dirname, 'web');
 fs.mkdirSync(DIR, { recursive: true });
+
+const TOKEN = process.env.GITHUB_TOKEN;
+const REPO = process.env.GITHUB_REPOSITORY;
 
 function loadConfig() {
     return fs.readFileSync(path.join(__dirname, 'web.txt'), 'utf8').split('\n').map(s => s.replace(/#.*/, '').trim()).filter(s => s).map(s => {
@@ -27,25 +31,61 @@ async function visit(page, url) {
     return t;
 }
 
-function runCmd(tag, cmd) {
-    const out = execSync(cmd, { stdio: 'pipe' });
-    process.stdout.write(out.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n');
+function runCmd(tag, cmd, args) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn(cmd, args, { shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.stdout.on('data', d => process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'));
+        proc.stderr.on('data', d => process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'));
+        proc.on('close', code => code === 0 ? resolve() : reject(Error(`exit ${code}`)));
+        proc.on('error', reject);
+    });
 }
 
-function ftpGet(s) {
+async function ftpGet(s) {
     const d = path.join(DIR, s.name);
     fs.rmSync(d, { recursive: true, force: true });
     fs.mkdirSync(d, { recursive: true });
-    runCmd(s.name, `lftp -c "set ftp:ssl-allow no; set ftp:passive-mode on; open -u ${s.user},${s.pass} ${s.host}; mirror --parallel=6 --no-perms --no-umask --verbose ${s.remote} ${d}; bye" 2>&1`);
+    await runCmd(s.name, `lftp -c "set ftp:ssl-allow no; set ftp:passive-mode on; open -u ${s.user},${s.pass} ${s.host}; mirror --parallel=6 --no-perms --no-umask --verbose ${s.remote} ${d}; bye"`);
 }
 
-function do7z(s) {
+async function do7z(s) {
     const d = path.join(DIR, s.name);
     const a = path.join(DIR, `${s.name}.7z`);
     if (!fs.existsSync(d) || fs.readdirSync(d).length === 0) { fs.rmSync(d, { recursive: true, force: true }); return null; }
-    runCmd(s.name, `7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=64m -ms=on "${a}" "${d}"/* 2>&1`);
+    await runCmd(s.name, `7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=64m -ms=on "${a}" "${d}"/*`);
     if (fs.statSync(a).size > 1000) { fs.rmSync(d, { recursive: true }); return a; }
     return null;
+}
+
+function uploadAsset(file, tag) {
+    if (!TOKEN || !REPO) return;
+    const name = path.basename(file);
+    const url = `https://uploads.github.com/repos/${REPO}/releases/${tag}/assets?name=${name}`;
+    const data = fs.readFileSync(file);
+    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': data.length } });
+    req.write(data);
+    req.end();
+    fs.unlinkSync(file);
+}
+
+function api(url, opts) {
+    return new Promise((r, j) => {
+        const req = https.request(url, { method: opts.method || 'GET', headers: { 'Authorization': `Bearer ${TOKEN}`, 'User-Agent': 'node', 'Content-Type': 'application/json', ...opts.headers } }, res => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => { try { r(JSON.parse(d)); } catch { r({}); } });
+        });
+        req.on('error', j);
+        if (opts.body) req.write(opts.body);
+        req.end();
+    });
+}
+
+async function ensureRelease(tag) {
+    const info = await api(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, {});
+    if (info.id) return info.id;
+    const created = await api(`https://api.github.com/repos/${REPO}/releases`, { method: 'POST', body: JSON.stringify({ tag_name: tag, name: tag }) });
+    return created.id;
 }
 
 async function main() {
@@ -53,7 +93,8 @@ async function main() {
     console.log(`sites: ${sites.length}\n`);
 
     const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-    let ok = 0, done = 0, active = 0, maxMem = 0, maxConc = 5;
+    let ok = 0, done = 0, active = 0, maxMem = 0, maxConc = 8;
+    const releaseId = await ensureRelease('backup');
 
     async function run(s) {
         active++;
@@ -62,12 +103,16 @@ async function main() {
         try {
             console.log(`[${s.name}] (active: ${active})`);
             process.stdout.write('  backup... '); console.log(await visit(p, `${s.url}/backup.php`));
-            process.stdout.write('  ftp... '); ftpGet(s); console.log('done');
+            process.stdout.write('  ftp...\n'); await ftpGet(s); console.log(`  [${s.name}] ftp done`);
             process.stdout.write('  cleanup... '); console.log(await visit(p, `${s.url}/backup.php?d`));
-            process.stdout.write('  compress... '); const a = do7z(s);
-            console.log(a ? `${(fs.statSync(a).size / 1048576).toFixed(2)} MB` : 'no files');
+            process.stdout.write('  compress...\n'); const a = await do7z(s);
+            if (a) {
+                const size = (fs.statSync(a).size / 1048576).toFixed(2);
+                console.log(`  [${s.name}] ${size} MB`);
+                process.stdout.write('  upload... '); uploadAsset(a, releaseId); console.log('ok');
+            } else { console.log('  no files'); }
             ok++;
-        } catch (e) { console.log(`  fail: ${e.message}`); }
+        } catch (e) { console.log(`  [${s.name}] fail: ${e.message}`); }
         finally { await p.close(); active--; update(mb); }
         done++;
         console.log(`progress: ${done}/${sites.length} (ok: ${ok})\n`);
