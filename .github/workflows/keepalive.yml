@@ -16,11 +16,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run backup.js
+      - name: Install dependencies
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lftp p7zip-full
           npm install playwright
           npx playwright install chromium
-          node backup.js
+
+      - name: Run backup.js
+        run: node backup.js
 
       - name: Upload to GitHub Release
         env:
