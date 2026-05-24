@@ -1,4 +1,3 @@
-# 格式: 站点域名|FTP地址|FTP用户|FTP密码|FTP目录
 cleaningmachine-ask.com|ftpupload.net|if0_37953882|guangzhoujunyu|htdocs #20291220
 en.xingwang168.cn|ftpupload.net|if0_38487207|Gzjunyuwanluo|en.xingwang168.cn/htdocs #20300310
 en.gzxiangtu.com|ftpupload.net|if0_41953842|Gzjunyu168|en.gzxiangtu.com/htdocs #20291226
