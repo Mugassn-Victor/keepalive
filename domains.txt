@@ -15,10 +15,9 @@ en.truflourez.com #20290930
 en.szbaijiyin.com #20290926
 en.hzhonglida.com #20291017
 en.btelogistics.net #20291101
-en.gzdphj.com
-en.flyaford.com
-en.gdgtzx.com
-cleaningmachine-ask.com
-en.xingwang168.cn
-en.gzxiangtu.com
-yun.mugassn.cloudns.org
+en.gzdphj.com #20291107
+en.flyaford.com #20291119
+en.gdgtzx.com #20291108
+cleaningmachine-ask.com #20291220
+en.xingwang168.cn #20300310
+en.gzxiangtu.com #20291226
