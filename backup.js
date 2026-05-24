@@ -53,7 +53,7 @@ async function main() {
     console.log(`sites: ${sites.length}\n`);
 
     const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-    let ok = 0, done = 0, active = 0, maxMem = 0, maxConc = 999;
+    let ok = 0, done = 0, active = 0, maxMem = 0, maxConc = 5;
 
     async function run(s) {
         active++;
@@ -68,12 +68,12 @@ async function main() {
             console.log(a ? `${(fs.statSync(a).size / 1048576).toFixed(2)} MB` : 'no files');
             ok++;
         } catch (e) { console.log(`  fail: ${e.message}`); }
-        finally { await p.close(); active--; update(); }
+        finally { await p.close(); active--; update(mb); }
         done++;
         console.log(`progress: ${done}/${sites.length} (ok: ${ok})\n`);
     }
 
-    function update() {
+    function update(mb) {
         const mem = (mb - os.freemem()) / 1073741824;
         if (mem > maxMem) {
             maxMem = mem;
