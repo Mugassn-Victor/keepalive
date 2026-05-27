@@ -34,8 +34,14 @@ async function visit(page, url) {
 function runCmd(tag, cmd, args) {
     return new Promise((resolve, reject) => {
         const proc = spawn(cmd, args, { shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
-        proc.stdout.on('data', d => process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'));
-        proc.stderr.on('data', d => process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'));
+        proc.stdout.on('data', d => {
+            try { process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'); } catch {}
+        });
+        proc.stderr.on('data', d => {
+            try { process.stdout.write(d.toString().split('\n').filter(l => l).map(l => `  [${tag}] ${l}`).join('\n') + '\n'); } catch {}
+        });
+        proc.stdout.on('error', () => {});
+        proc.stderr.on('error', () => {});
         proc.on('close', code => code === 0 ? resolve() : reject(Error(`exit ${code}`)));
         proc.on('error', reject);
     });
@@ -53,8 +59,9 @@ async function do7z(s) {
     const a = path.join(DIR, `${s.name}.7z`);
     if (!fs.existsSync(d) || fs.readdirSync(d).length === 0) { fs.rmSync(d, { recursive: true, force: true }); return null; }
     await runCmd(s.name, `7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=64m -ms=on "${a}" "${d}"/*`);
-    if (fs.statSync(a).size > 1000) { fs.rmSync(d, { recursive: true }); return a; }
-    return null;
+    if (!fs.existsSync(a) || fs.statSync(a).size <= 1000) { return null; }
+    fs.rmSync(d, { recursive: true });
+    return a;
 }
 
 function uploadAsset(file, tag) {
@@ -62,7 +69,11 @@ function uploadAsset(file, tag) {
     const name = path.basename(file);
     const url = `https://uploads.github.com/repos/${REPO}/releases/${tag}/assets?name=${name}`;
     const data = fs.readFileSync(file);
-    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': data.length } });
+    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': data.length } }, res => {
+        res.resume(); // drain response to free socket
+        if (res.statusCode >= 400) console.log(`  upload warn: HTTP ${res.statusCode} for ${name}`);
+    });
+    req.on('error', e => console.log(`  upload error: ${e.message}`));
     req.write(data);
     req.end();
     fs.unlinkSync(file);
@@ -136,5 +147,8 @@ async function main() {
     await browser.close();
     console.log(`done: ${ok}/${sites.length}`);
 }
+
+process.stdout.on('error', e => { if (e.code !== 'EPIPE') throw e; });
+process.stderr.on('error', e => { if (e.code !== 'EPIPE') throw e; });
 
 main().catch(e => { console.error(e.message); process.exit(1); });
