@@ -68,15 +68,18 @@ function uploadAsset(file, tag) {
     if (!TOKEN || !REPO) return;
     const name = path.basename(file);
     const url = `https://uploads.github.com/repos/${REPO}/releases/${tag}/assets?name=${name}`;
-    const data = fs.readFileSync(file);
-    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': data.length } }, res => {
-        res.resume(); // drain response to free socket
+    const size = fs.statSync(file).size;
+    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': size } }, res => {
+        res.resume();
         if (res.statusCode >= 400) console.log(`  upload warn: HTTP ${res.statusCode} for ${name}`);
     });
     req.on('error', e => console.log(`  upload error: ${e.message}`));
-    req.write(data);
-    req.end();
-    fs.unlinkSync(file);
+    req.socket && req.socket.on('error', e => console.log(`  upload socket error: ${e.message}`));
+    req.on('socket', sock => sock.on('error', e => console.log(`  upload socket error: ${e.message}`)));
+    const stream = fs.createReadStream(file);
+    stream.on('error', e => { console.log(`  upload read error: ${e.message}`); req.destroy(); });
+    stream.pipe(req);
+    stream.on('end', () => fs.unlinkSync(file));
 }
 
 function api(url, opts) {
