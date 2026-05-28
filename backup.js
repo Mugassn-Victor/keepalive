@@ -64,22 +64,34 @@ async function do7z(s) {
     return a;
 }
 
-function uploadAsset(file, tag) {
+async function uploadAsset(file, tag) {
     if (!TOKEN || !REPO) return;
     const name = path.basename(file);
+
+    // 删除同名旧 asset
+    const existing = await api(`https://api.github.com/repos/${REPO}/releases/${tag}/assets`, {});
+    if (Array.isArray(existing)) {
+        const old = existing.find(a => a.name === name);
+        if (old) await api(`https://api.github.com/repos/${REPO}/releases/assets/${old.id}`, { method: 'DELETE' });
+    }
+
     const url = `https://uploads.github.com/repos/${REPO}/releases/${tag}/assets?name=${name}`;
     const size = fs.statSync(file).size;
-    const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': size } }, res => {
-        res.resume();
-        if (res.statusCode >= 400) console.log(`  upload warn: HTTP ${res.statusCode} for ${name}`);
+    await new Promise((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        const req = https.request(url, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/x-7z-compressed', 'Content-Length': size } }, res => {
+            res.resume();
+            if (res.statusCode >= 400) console.log(`  upload warn: HTTP ${res.statusCode} for ${name}`);
+            done();
+        });
+        req.on('error', e => { console.log(`  upload error: ${e.message}`); done(); });
+        req.on('socket', sock => sock.on('error', e => { console.log(`  upload socket error: ${e.message}`); done(); }));
+        const stream = fs.createReadStream(file);
+        stream.on('error', e => { console.log(`  upload read error: ${e.message}`); req.destroy(); done(); });
+        stream.pipe(req);
     });
-    req.on('error', e => console.log(`  upload error: ${e.message}`));
-    req.socket && req.socket.on('error', e => console.log(`  upload socket error: ${e.message}`));
-    req.on('socket', sock => sock.on('error', e => console.log(`  upload socket error: ${e.message}`)));
-    const stream = fs.createReadStream(file);
-    stream.on('error', e => { console.log(`  upload read error: ${e.message}`); req.destroy(); });
-    stream.pipe(req);
-    stream.on('end', () => fs.unlinkSync(file));
+    if (fs.existsSync(file)) fs.unlinkSync(file);
 }
 
 function api(url, opts) {
@@ -87,7 +99,7 @@ function api(url, opts) {
         const req = https.request(url, { method: opts.method || 'GET', headers: { 'Authorization': `Bearer ${TOKEN}`, 'User-Agent': 'node', 'Content-Type': 'application/json', ...opts.headers } }, res => {
             let d = '';
             res.on('data', c => d += c);
-            res.on('end', () => { try { r(JSON.parse(d)); } catch { r({}); } });
+            res.on('end', () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } });
         });
         req.on('error', j);
         if (opts.body) req.write(opts.body);
@@ -123,7 +135,7 @@ async function main() {
             if (a) {
                 const size = (fs.statSync(a).size / 1048576).toFixed(2);
                 console.log(`  [${s.name}] ${size} MB`);
-                process.stdout.write('  upload... '); uploadAsset(a, releaseId); console.log('ok');
+                process.stdout.write('  upload... '); await uploadAsset(a, releaseId); console.log('ok');
             } else { console.log('  no files'); }
             ok++;
         } catch (e) { console.log(`  [${s.name}] fail: ${e.message}`); }
