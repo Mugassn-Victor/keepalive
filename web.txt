@@ -1,4 +1,3 @@
-cleaningmachine-ask.com|ftpupload.net|if0_37953882|guangzhoujunyu|htdocs #20291220
 en.xingwang168.cn|ftpupload.net|if0_38487207|Gzjunyuwanluo|en.xingwang168.cn/htdocs #20300310
 en.gzxiangtu.com|ftpupload.net|if0_41953842|Gzjunyu168|en.gzxiangtu.com/htdocs #20291226
 en.gzdphj.com|ftpupload.net|if0_37668477|guangzhoujunyu|en.gzdphj.com/htdocs #20291107
@@ -23,3 +22,4 @@ keyun-co.com|ftpupload.net|if0_39996873|gzjunyuwl|htdocs #20280919
 en.gz-siguda.com|ftpupload.net|if0_39558662|gzjunyuwanluo|en.gz-siguda.com/htdocs
 santaiwater.com|ftpupload.net|if0_39643005|gzjunyuwl|htdocs #20310804 SSL到期20261016
 sunwinpcba.com|ftpupload.net|if0_40659777|Gzjunyu168|htdocs #20301211 SSL到期20270207
+cleaningmachine-ask.com|ftpupload.net|if0_37953882|guangzhoujunyu|htdocs #20291220
